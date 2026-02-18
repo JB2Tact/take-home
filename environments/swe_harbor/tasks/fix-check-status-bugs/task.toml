@@ -3,9 +3,9 @@ version = "1.0"
 [metadata]
 author_name = "Akil Kanwar"
 author_email = "akilkanwar05@gmail.com"
-difficulty = "easy"       
-category = "programming"
-tags = ["python", "django", "rest-api", "models"]                  
+difficulty = "hard"
+category = "debugging"
+tags = ["python", "django", "debugging", "discovery", "multi-file"]
 
 [verifier]
 timeout_sec = 180.0

@@ -61,11 +61,139 @@ with open("hc/api/models.py", "w") as f:
     f.write(content)
 PATCH2
 
-# --- 3. Run migration ---
+# --- 3. Add maintenance_start, maintenance_end to CheckDict TypedDict ---
+python3 << 'PATCH2B'
+with open("hc/api/models.py", "r") as f:
+    content = f.read()
+
+old = """    pause_url: str
+    resume_url: str
+    channels: str
+    timeout: int
+    schedule: str
+    tz: str"""
+
+new = """    pause_url: str
+    resume_url: str
+    channels: str
+    maintenance_start: str | None
+    maintenance_end: str | None
+    timeout: int
+    schedule: str
+    tz: str"""
+
+if old in content:
+    content = content.replace(old, new, 1)
+else:
+    old2 = """    resume_url: str
+    channels: str
+    timeout: int
+    schedule: str
+    tz: str"""
+    new2 = """    resume_url: str
+    channels: str
+    maintenance_start: str | None
+    maintenance_end: str | None
+    timeout: int
+    schedule: str
+    tz: str"""
+    content = content.replace(old2, new2, 1)
+
+with open("hc/api/models.py", "w") as f:
+    f.write(content)
+PATCH2B
+
+# --- 4. Add maintenance_start, maintenance_end to to_dict() ---
+python3 << 'PATCH2C'
+with open("hc/api/models.py", "r") as f:
+    content = f.read()
+
+old = """            "filter_subject": self.filter_subject,
+            "filter_body": self.filter_body,
+        }
+
+        if self.last_duration:"""
+
+new = """            "filter_subject": self.filter_subject,
+            "filter_body": self.filter_body,
+            "maintenance_start": isostring(self.maintenance_start),
+            "maintenance_end": isostring(self.maintenance_end),
+        }
+
+        if self.last_duration:"""
+
+content = content.replace(old, new, 1)
+with open("hc/api/models.py", "w") as f:
+    f.write(content)
+PATCH2C
+
+# --- 5. Run migration ---
 python manage.py makemigrations api --name maintenance_window
 python manage.py migrate
 
-# --- 4. In sendalerts notify(): skip sending down alerts when check in maintenance ---
+# --- 6. Add maintenance_start, maintenance_end to Spec in views.py ---
+python3 << 'PATCH4'
+with open("hc/api/views.py", "r") as f:
+    content = f.read()
+
+old = """    tz: str | None = None
+    unique: list[Literal["name", "slug", "tags", "timeout", "grace"]] | None = None"""
+
+new = """    tz: str | None = None
+    maintenance_start: str | None = None
+    maintenance_end: str | None = None
+    unique: list[Literal["name", "slug", "tags", "timeout", "grace"]] | None = None"""
+
+content = content.replace(old, new, 1)
+with open("hc/api/views.py", "w") as f:
+    f.write(content)
+PATCH4
+
+# --- 7. Handle maintenance_start/end in _update() in views.py ---
+python3 << 'PATCH5'
+with open("hc/api/views.py", "r") as f:
+    content = f.read()
+
+old = """    if need_save:
+        check.alert_after = check.going_down_after()
+        check.save()
+
+    # This needs to be done after saving the check, because of
+    # the M2M relation between checks and channels:
+    if new_channels is not None:
+        check.channel_set.set(new_channels)"""
+
+new = """    if spec.maintenance_start is not None:
+        if spec.maintenance_start == "":
+            check.maintenance_start = None
+        else:
+            from datetime import datetime as _dt
+            check.maintenance_start = _dt.fromisoformat(spec.maintenance_start)
+        need_save = True
+
+    if spec.maintenance_end is not None:
+        if spec.maintenance_end == "":
+            check.maintenance_end = None
+        else:
+            from datetime import datetime as _dt
+            check.maintenance_end = _dt.fromisoformat(spec.maintenance_end)
+        need_save = True
+
+    if need_save:
+        check.alert_after = check.going_down_after()
+        check.save()
+
+    # This needs to be done after saving the check, because of
+    # the M2M relation between checks and channels:
+    if new_channels is not None:
+        check.channel_set.set(new_channels)"""
+
+content = content.replace(old, new, 1)
+with open("hc/api/views.py", "w") as f:
+    f.write(content)
+PATCH5
+
+# --- 8. In sendalerts notify(): skip sending down alerts when check in maintenance ---
 python3 << 'PATCH3'
 with open("hc/api/management/commands/sendalerts.py", "r") as f:
     content = f.read()

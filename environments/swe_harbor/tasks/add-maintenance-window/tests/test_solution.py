@@ -1,9 +1,10 @@
 """Tests for the Maintenance Window feature (no down alerts during window)."""
 from __future__ import annotations
 
+import json
 import os
 import sys
-from datetime import timedelta as td
+from datetime import datetime, timedelta as td, timezone
 
 sys.path.insert(0, "/app")
 os.environ.setdefault("DJANGO_SETTINGS_MODULE", "hc.settings")
@@ -434,6 +435,15 @@ class NotifyEdgeCasesTestCase(BaseTestCase):
         notify(flip)
         self.assertEqual(Notification.objects.count(), initial)
 
+    def test_notify_returns_none_for_suppressed_down(self):
+        self.check.maintenance_start = now() - td(minutes=30)
+        self.check.maintenance_end = now() + td(hours=1)
+        self.check.save()
+        flip = Flip(owner=self.check, created=now(), old_status="up", new_status="down")
+        flip.save()
+        result = notify(flip)
+        self.assertIsNone(result)
+
     def test_different_project_check_in_maintenance_does_not_affect_our_flips(self):
         other_check = Check.objects.create(
             project=self.bobs_project,
@@ -453,3 +463,111 @@ class NotifyEdgeCasesTestCase(BaseTestCase):
         initial = Notification.objects.count()
         notify(flip_ours)
         self.assertGreater(Notification.objects.count(), initial)
+
+
+# ---- Serialization: to_dict() includes maintenance window ----
+
+class ToDictMaintenanceTestCase(BaseTestCase):
+    """to_dict() must include maintenance_start and maintenance_end."""
+
+    def setUp(self):
+        super().setUp()
+        self.check = Check.objects.create(project=self.project, name="Test Check")
+
+    def test_to_dict_has_maintenance_start_key(self):
+        d = self.check.to_dict()
+        self.assertIn("maintenance_start", d)
+
+    def test_to_dict_has_maintenance_end_key(self):
+        d = self.check.to_dict()
+        self.assertIn("maintenance_end", d)
+
+    def test_to_dict_maintenance_null_by_default(self):
+        d = self.check.to_dict()
+        self.assertIsNone(d["maintenance_start"])
+        self.assertIsNone(d["maintenance_end"])
+
+    def test_to_dict_maintenance_set_values_iso(self):
+        start = now()
+        end = now() + td(hours=2)
+        self.check.maintenance_start = start
+        self.check.maintenance_end = end
+        self.check.save()
+        d = self.check.to_dict()
+        self.assertIsNotNone(d["maintenance_start"])
+        self.assertIsNotNone(d["maintenance_end"])
+        self.assertIn("T", d["maintenance_start"])
+
+    def test_to_dict_maintenance_cleared_after_reset(self):
+        self.check.maintenance_start = now()
+        self.check.maintenance_end = now() + td(hours=1)
+        self.check.save()
+        self.check.maintenance_start = None
+        self.check.maintenance_end = None
+        self.check.save()
+        d = self.check.to_dict()
+        self.assertIsNone(d["maintenance_start"])
+        self.assertIsNone(d["maintenance_end"])
+
+
+# ---- API: set maintenance window via update endpoint ----
+
+def single_url(check, v=3):
+    return f"/api/v{v}/checks/{check.code}"
+
+class ApiUpdateMaintenanceTestCase(BaseTestCase):
+    """API update endpoint must accept maintenance_start and maintenance_end."""
+
+    def setUp(self):
+        super().setUp()
+        self.check = Check.objects.create(project=self.project, name="Api Test")
+
+    def test_set_maintenance_via_api(self):
+        start = now().replace(microsecond=0)
+        end = (now() + td(hours=2)).replace(microsecond=0)
+        r = self.client.post(
+            single_url(self.check),
+            json.dumps({
+                "api_key": "X" * 32,
+                "maintenance_start": start.isoformat(),
+                "maintenance_end": end.isoformat(),
+            }),
+            content_type="application/json",
+        )
+        self.assertEqual(r.status_code, 200)
+        self.check.refresh_from_db()
+        self.assertIsNotNone(self.check.maintenance_start)
+        self.assertIsNotNone(self.check.maintenance_end)
+
+    def test_clear_maintenance_via_api(self):
+        self.check.maintenance_start = now()
+        self.check.maintenance_end = now() + td(hours=1)
+        self.check.save()
+        r = self.client.post(
+            single_url(self.check),
+            json.dumps({
+                "api_key": "X" * 32,
+                "maintenance_start": "",
+                "maintenance_end": "",
+            }),
+            content_type="application/json",
+        )
+        self.assertEqual(r.status_code, 200)
+        self.check.refresh_from_db()
+        self.assertIsNone(self.check.maintenance_start)
+        self.assertIsNone(self.check.maintenance_end)
+
+    def test_get_check_includes_maintenance_in_response(self):
+        start = now().replace(microsecond=0)
+        end = (now() + td(hours=2)).replace(microsecond=0)
+        self.check.maintenance_start = start
+        self.check.maintenance_end = end
+        self.check.save()
+        r = self.client.get(
+            single_url(self.check),
+            HTTP_X_API_KEY="X" * 32,
+        )
+        self.assertEqual(r.status_code, 200)
+        data = r.json()
+        self.assertEqual(data["maintenance_start"], start.isoformat())
+        self.assertEqual(data["maintenance_end"], end.isoformat())

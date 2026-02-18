@@ -269,3 +269,70 @@ class PauseReasonApiVersionsTestCase(BaseTestCase):
         )
         self.assertEqual(r.status_code, 200)
         self.assertEqual(r.json()["pause_reason"], "v3")
+
+    def _post_pause(self, data=None):
+        body = {"api_key": "X" * 32}
+        if data is not None:
+            body.update(data)
+        return self.client.post(
+            pause_url(self.check),
+            json.dumps(body),
+            content_type="application/json",
+        )
+
+    def test_pause_reason_boolean_returns_400(self):
+        r = self._post_pause({"reason": True})
+        self.assertEqual(r.status_code, 400)
+
+    def test_pause_reason_null_returns_400(self):
+        r = self.client.post(
+            pause_url(self.check),
+            json.dumps({"api_key": "X" * 32, "reason": None}),
+            content_type="application/json",
+        )
+        self.assertEqual(r.status_code, 400)
+
+    def test_pause_reason_nested_object_returns_400(self):
+        r = self._post_pause({"reason": {"nested": "value"}})
+        self.assertEqual(r.status_code, 400)
+
+    def test_pause_twice_overwrites_reason(self):
+        self._post_pause({"reason": "first"})
+        self._post_pause({"reason": "second"})
+        self.check.refresh_from_db()
+        self.assertEqual(self.check.pause_reason, "second")
+
+    def test_pause_reason_with_unicode(self):
+        r = self._post_pause({"reason": "maintenance \u2014 d\u00e9ploiement \U0001f680"})
+        self.assertEqual(r.status_code, 200)
+        self.check.refresh_from_db()
+        self.assertIn("\u2014", self.check.pause_reason)
+        self.assertIn("\U0001f680", self.check.pause_reason)
+
+    def test_pause_reason_with_newlines(self):
+        r = self._post_pause({"reason": "line1\nline2\nline3"})
+        self.assertEqual(r.status_code, 200)
+        self.check.refresh_from_db()
+        self.assertIn("\n", self.check.pause_reason)
+
+    def test_resume_clears_long_reason(self):
+        self._post_pause({"reason": "x" * 500})
+        self.check.refresh_from_db()
+        self.assertEqual(len(self.check.pause_reason), 500)
+        r = self.client.post(
+            resume_url(self.check),
+            json.dumps({"api_key": "X" * 32}),
+            content_type="application/json",
+        )
+        self.assertEqual(r.status_code, 200)
+        self.check.refresh_from_db()
+        self.assertEqual(self.check.pause_reason, "")
+
+    def test_get_check_pause_reason_round_trip(self):
+        self._post_pause({"reason": "round trip test"})
+        r = self.client.get(
+            single_url(self.check),
+            HTTP_X_API_KEY="X" * 32,
+        )
+        self.assertEqual(r.status_code, 200)
+        self.assertEqual(r.json()["pause_reason"], "round trip test")
