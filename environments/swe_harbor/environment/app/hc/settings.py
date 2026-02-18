@@ -65,7 +65,6 @@ INSTALLED_APPS = (
     "compressor",
     "hc.api",
     "hc.front",
-    "hc.logs",
     "hc.payments",
 )
 
@@ -115,20 +114,19 @@ TEMPLATES = [
     }
 ]
 
-# Extend Django logging to log unhandled exceptions
-# and all logs from hc.* loggers to the database.
+# Logging: use StreamHandler (hc.logs not present in this env).
 LOGGING = {
     "version": 1,
     "disable_existing_loggers": False,
     "handlers": {
-        "db": {
+        "console": {
             "level": "DEBUG",
-            "class": "hc.logs.Handler",
+            "class": "logging.StreamHandler",
         },
     },
     "loggers": {
-        "django.request": {"level": "ERROR", "handlers": ["db"]},
-        "hc": {"level": "DEBUG", "handlers": ["db"]},
+        "django.request": {"level": "ERROR", "handlers": ["console"]},
+        "hc": {"level": "DEBUG", "handlers": ["console"]},
     },
 }
 
